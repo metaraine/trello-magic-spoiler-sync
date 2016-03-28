@@ -12,7 +12,7 @@ const NEW_CARD_LIMIT = Infinity
 const SCRAPE_CONCURRENCY = 50
 const ADD_CONCURRENCY = 1
 
-const dryRun = false // does not add cards to trello
+const dryRun = true // does not add cards to trello
 
 const basicLands = {
   plains: 1,
@@ -22,19 +22,18 @@ const basicLands = {
   forest: 1
 }
 
-log = console.log
-error = R.pipe(chalk.red, console.error)
+const log = console.log
+const error = R.pipe(chalk.red, console.error)
 
 // remove the -216x302 from the given url to get the larger image
-function getBigImageUrl(url) {
-  return url.replace(/-\d+x\d+(?=\..{3}$)/, '')
-}
+const getBigImageUrl = R.replace(/-\d+x\d+(?=\..{3}$)/, '')
 
 // get the color of the pre-transformed card given a string like "White, Black" where
 // the last given color is the pre-transformed color
-function getTransformColor(str) {
-  return str.slice(str.lastIndexOf(',')+2)
-}
+const getTransformColor = R.useWith(R.slice, [
+  R.identity,
+  R.pipe(R.lastIndexOf(','), R.add(2))
+])
 
 // gets the intended list name for the card determined by its type and color
 function getTargetListName(card) {
@@ -49,24 +48,19 @@ function getTargetListName(card) {
 }
 
 // lowercase, trim, remove punctuation and extraneous whitespace from a given string
-function makeLooselyComparable(str) {
-  return str
-    .trim()
-    .replace(/ {2,}/g, ' ')
-    .replace(/\W/g, '')
-    .toLowerCase()
-}
+const makeLooselyComparable = R.pipe(
+  R.trim,
+  R.replace(/ {2,}/g, ' '),
+  R.replace(/\W/g, ''),
+  R.toLower()
+)
 
 const eqLoose = R.eqBy(makeLooselyComparable)
 
 // a loose string contains that ignores case and extra whitespace
-containsLoose = R.curry(function(array, str) {
-  return R.any(eqLoose(str), array)
-})
+const containsLoose = R.useWith(R.any, [eqLoose, R.identity])
 
-function isBasic(name) {
-  return name && name.toLowerCase() in basicLands
-}
+const isBasic = R.pipe(R.toLower, R.flip(R.has)(basicLands))
 
 // gets all the spoiler cards from the given magicspoiler.com url
 // recursively scrapes next pages
@@ -141,12 +135,17 @@ const spoilers = getSpoilers(SPOILER_URL)
 
 const newCards = Promise.join(allCards, spoilers, (allCards, spoilers) => {
   // reject all spoilers that exist in allCards
-  return R.reject(R.pipe(R.prop('name'), containsLoose(allCards)), spoilers)
+  return R.reject(R.pipe(R.prop('name'), R.flip(containsLoose)(allCards)), spoilers)
 })
 .then(R.take(NEW_CARD_LIMIT))
 .map(card => {
   return getDetails(card.detailsUrl).then(R.merge(card))
 }, { concurrency: SCRAPE_CONCURRENCY })
+
+// log some stuff
+spoilers.tap(x => log(`${x.length} total spoilers found.`))
+allCards.tap(x => log(`${x.length} cards on board.`))
+newCards.tap(x => log(`${x.length} new cards found.`))
 
 // add new cards to board
 Promise.join(lists, newCards, (lists, cards) => {
@@ -168,15 +167,8 @@ Promise.join(lists, newCards, (lists, cards) => {
         name: card.name,
         idList: list.id,
         pos: 'top'
-      }).then((trelloCard) => {
-        return trello.addAttachmentToCard(trelloCard.id, card.imageUrl)
-      })
+      }).then((trelloCard) => trello.addAttachmentToCard(trelloCard.id, card.imageUrl))
     }
 
   }, { concurrency: ADD_CONCURRENCY })
 })
-
-// log some stuff
-spoilers.tap(x => log(`${x.length} total spoilers found.`))
-allCards.tap(x => log(`${x.length} cards on board.`))
-newCards.tap(x => log(`${x.length} new cards found.`))
